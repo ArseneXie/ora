@@ -795,7 +795,6 @@ func (ses *Ses) Break() (err error) {
 	if err != nil {
 		return errE(err)
 	}
-	fmt.Printf("Break %p\n", ses)
 	//ses.Lock()
 	//defer ses.Unlock()
 	env := ses.Env()
