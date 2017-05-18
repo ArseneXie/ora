@@ -50,7 +50,7 @@ func (con *Con) PrepareContext(ctx context.Context, query string) (driver.Stmt, 
 	if err != nil {
 		return nil, maybeBadConn(err)
 	}
-	return &DrvStmt{stmt: stmt}, err
+	return &DrvStmt{stmt: stmt}, ctx.Err()
 }
 
 // BeginTx starts and returns a new transaction.

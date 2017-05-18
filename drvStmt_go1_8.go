@@ -26,36 +26,15 @@ func (ds *DrvStmt) ExecContext(ctx context.Context, values []driver.NamedValue) 
 		return nil, err
 	}
 	var res DrvExecResult
-	done := make(chan error)
-	go func() {
-		defer close(done)
-		var err error
-		res.rowsAffected, res.lastInsertId, err = ds.stmt.exeC(ctx, params, false)
-		if err != nil {
-			done <- errE(err)
-			return
-		}
-		done <- nil
-	}()
 	var err error
-	select {
-	case err = <-done:
-	case <-ctx.Done():
-		err = ctx.Err()
-		if isCanceled(err) {
-			ds.stmt.RLock()
-			ses := ds.stmt.ses
-			ds.stmt.RUnlock()
-			ses.Break()
-		}
-	}
+	res.rowsAffected, res.lastInsertId, err = ds.stmt.exeC(ctx, params, false)
 	if err != nil {
-		return nil, err
+		return &res, err
 	}
 	if res.rowsAffected == 0 {
-		return driver.RowsAffected(0), nil
+		return driver.RowsAffected(0), ctx.Err()
 	}
-	return &res, nil
+	return &res, ctx.Err()
 }
 
 // QueryContext enhances the Stmt interface by providing Query with context.
@@ -72,35 +51,11 @@ func (ds *DrvStmt) QueryContext(ctx context.Context, values []driver.NamedValue)
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	var rset *Rset
-	done := make(chan error)
-	go func() {
-		defer close(done)
-		var err error
-		rset, err = ds.stmt.qryC(ctx, params)
-		if err != nil {
-			done <- errE(err)
-			return
-		}
-		select {
-		case done <- nil:
-		default:
-		}
-
-	}()
-	select {
-	case err := <-done:
-		return &DrvQueryResult{rset: rset}, err
-	case <-ctx.Done():
-		err := ctx.Err()
-		if isCanceled(err) {
-			ds.stmt.RLock()
-			ses := ds.stmt.ses
-			ds.stmt.RUnlock()
-			ses.Break()
-		}
+	rset, err := ds.stmt.qryC(ctx, params)
+	if err != nil {
 		return nil, err
 	}
+	return &DrvQueryResult{rset: rset}, ctx.Err()
 }
 
 // vim: set fileencoding=utf-8 noet:

@@ -426,15 +426,21 @@ func (rset *Rset) open(stmt *Stmt, ocistmt *C.OCIStmt) error {
 	rset.log(logCfg.Rset.Open) // call log after rset.stmt is set
 	// get the implcit select-list describe information; no server round-trip
 	//fmt.Fprintf(os.Stdout, "stmt=%#v rset=%#v\n", stmt, rset)
-	r := C.OCIStmtExecute(
-		ses.ocisvcctx,       //OCISvcCtx           *svchp,
-		ocistmt,             //OCIStmt             *stmtp,
-		env.ocierr,          //OCIError            *errhp,
-		C.ub4(1),            //ub4                 iters,
-		C.ub4(0),            //ub4                 rowoff,
-		nil,                 //const OCISnapshot   *snap_in,
-		nil,                 //OCISnapshot         *snap_out,
-		C.OCI_DESCRIBE_ONLY) //ub4                 mode );
+	var r C.sword
+	for {
+		r = C.OCIStmtExecute(
+			ses.ocisvcctx,       //OCISvcCtx           *svchp,
+			ocistmt,             //OCIStmt             *stmtp,
+			env.ocierr,          //OCIError            *errhp,
+			C.ub4(1),            //ub4                 iters,
+			C.ub4(0),            //ub4                 rowoff,
+			nil,                 //const OCISnapshot   *snap_in,
+			nil,                 //OCISnapshot         *snap_out,
+			C.OCI_DESCRIBE_ONLY) //ub4                 mode );
+		if r != C.OCI_STILL_EXECUTING {
+			break
+		}
+	}
 	if r == C.OCI_ERROR {
 		return env.ociError()
 	}

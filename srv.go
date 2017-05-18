@@ -392,6 +392,23 @@ func (srv *Srv) OpenSes(cfg SesCfg) (ses *Ses, err error) {
 	return ses, nil
 }
 
+// SetNonblocking sets the nonblocking mode on the Srv.
+func (srv *Srv) SetNonblocking(set bool) error {
+	var state byte
+	r := C.OCIAttrGet(unsafe.Pointer(srv.ocisrv), C.OCI_HTYPE_STMT, unsafe.Pointer(&state), nil, C.OCI_ATTR_NONBLOCKING_MODE, srv.env.ocierr)
+	if r == C.OCI_ERROR {
+		return errE(srv.env.ociError())
+	}
+	if set == (state == C.TRUE) {
+		return nil
+	}
+	r = C.OCIAttrSet(unsafe.Pointer(srv.ocisrv), C.OCI_HTYPE_SERVER, nil, 0, C.OCI_ATTR_NONBLOCKING_MODE, srv.env.ocierr)
+	if r == C.OCI_ERROR {
+		return errE(srv.env.ociError())
+	}
+	return nil
+}
+
 // Version returns the Oracle database server version.
 //
 // Version requires the server have at least one open session.

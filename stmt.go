@@ -153,7 +153,6 @@ func (stmt *Stmt) close() (err error) {
 		// free ocistmt to release cursor on server
 		// OCIStmtRelease must be called with OCIStmtPrepare2
 		// See https://docs.oracle.com/database/121/LNOCI/oci09adv.htm#LNOCI16655
-		stmt.Lock()
 		env := stmt.Env()
 		r := C.OCIStmtRelease(
 			stmt.ocistmt,  // OCIStmt        *stmthp
@@ -162,13 +161,11 @@ func (stmt *Stmt) close() (err error) {
 			C.ub4(0),      // ub4 keylen
 			C.OCI_DEFAULT, // ub4 mode
 		)
-		stmt.Unlock()
 		if r == C.OCI_ERROR {
 			errs.PushBack(errE(env.ociError()))
 		}
 
 		stmt.SetCfg(StmtCfg{})
-		stmt.Lock()
 		stmt.stringPtrBufferSize = 0
 		stmt.env.Store((*Env)(nil))
 		stmt.ses = nil
@@ -181,7 +178,6 @@ func (stmt *Stmt) close() (err error) {
 		stmt.bindInfo = bindInfo{}
 		stmt.openRsets.clear()
 		_drv.stmtPool.Put(stmt)
-		stmt.Unlock()
 
 		multiErr := newMultiErrL(errs)
 		if multiErr != nil {
@@ -192,6 +188,8 @@ func (stmt *Stmt) close() (err error) {
 	}()
 	// close binds
 	stmt.Lock()
+	defer stmt.Unlock()
+
 	for _, bind := range stmt.bnds {
 		if bind == nil {
 			continue
@@ -202,7 +200,6 @@ func (stmt *Stmt) close() (err error) {
 		}
 	}
 	openRsets := stmt.openRsets
-	stmt.Unlock()
 	//fmt.Println("closeAll " + stmt.sysName())
 	openRsets.closeAll(errs)
 
@@ -248,19 +245,26 @@ func (stmt *Stmt) Parse() (err error) {
 	}
 	// Execute statement on Oracle server
 	stmt.RLock()
+	defer stmt.RUnlock()
 	env := stmt.Env()
 	stmt.ses.RLock()
-	r := C.OCIStmtExecute(
-		stmt.ses.ocisvcctx, //OCISvcCtx           *svchp,
-		stmt.ocistmt,       //OCIStmt             *stmtp,
-		env.ocierr,         //OCIError            *errhp,
-		C.ub4(1),           //ub4                 iters,
-		C.ub4(0),           //ub4                 rowoff,
-		nil,                //const OCISnapshot   *snap_in,
-		nil,                //OCISnapshot         *snap_out,
-		C.OCI_PARSE_ONLY)   //ub4                 mode );
-	stmt.ses.RUnlock()
-	stmt.RUnlock()
+	defer stmt.ses.RUnlock()
+	// set non-blocking on
+	var r C.sword
+	for {
+		r = C.OCIStmtExecute(
+			stmt.ses.ocisvcctx, //OCISvcCtx           *svchp,
+			stmt.ocistmt,       //OCIStmt             *stmtp,
+			env.ocierr,         //OCIError            *errhp,
+			C.ub4(1),           //ub4                 iters,
+			C.ub4(0),           //ub4                 rowoff,
+			nil,                //const OCISnapshot   *snap_in,
+			nil,                //OCISnapshot         *snap_out,
+			C.OCI_PARSE_ONLY)   //ub4                 mode );
+		if r != C.OCI_STILL_EXECUTING {
+			break
+		}
+	}
 	if r == C.OCI_ERROR {
 		return errE(env.ociError())
 	}
@@ -332,15 +336,33 @@ func (stmt *Stmt) exeC(ctx context.Context, params []interface{}, isAssocArray b
 	stmt.RLock()
 	env := stmt.Env()
 	stmt.ses.RLock()
-	r := C.OCIStmtExecute(
-		stmt.ses.ocisvcctx, //OCISvcCtx           *svchp,
-		stmt.ocistmt,       //OCIStmt             *stmtp,
-		env.ocierr,         //OCIError            *errhp,
-		C.ub4(iterations),  //ub4                 iters,
-		C.ub4(0),           //ub4                 rowoff,
-		nil,                //const OCISnapshot   *snap_in,
-		nil,                //OCISnapshot         *snap_out,
-		mode)               //ub4                 mode );
+	stmt.ses.SetNonblocking(true)
+	var r C.sword
+	d := 10 * time.Millisecond
+	for {
+		r = C.OCIStmtExecute(
+			stmt.ses.ocisvcctx, //OCISvcCtx           *svchp,
+			stmt.ocistmt,       //OCIStmt             *stmtp,
+			env.ocierr,         //OCIError            *errhp,
+			C.ub4(iterations),  //ub4                 iters,
+			C.ub4(0),           //ub4                 rowoff,
+			nil,                //const OCISnapshot   *snap_in,
+			nil,                //OCISnapshot         *snap_out,
+			mode)               //ub4                 mode );
+		if r != C.OCI_STILL_EXECUTING {
+			break
+		}
+		if err := ctx.Err(); err != nil {
+			stmt.ses.SetNonblocking(false)
+			stmt.ses.Break()
+			stmt.ses.RUnlock()
+			stmt.RUnlock()
+			return 0, 0, err
+		}
+		time.Sleep(d)
+		d += d >> 1 // *1.5
+	}
+	stmt.ses.srv.SetNonblocking(false)
 	stmt.ses.RUnlock()
 	stmtType, hasPtrBind := stmt.stmtType, stmt.hasPtrBind
 	stmt.RUnlock()
@@ -412,20 +434,38 @@ func (stmt *Stmt) qryC(ctx context.Context, params []interface{}) (rset *Rset, e
 	env := stmt.Env()
 	ses := stmt.ses
 	ocistmt := stmt.ocistmt
-	ses.RLock()
-	r := C.OCIStmtExecute(
-		//stmt.ses.ocisvcctx,      //OCISvcCtx           *svchp,
-		ses.ocisvcctx, //OCISvcCtx           *svchp,
-		ocistmt,       //OCIStmt             *stmtp,
-		env.ocierr,    //OCIError            *errhp,
-		C.ub4(0),      //ub4                 iters,
-		C.ub4(0),      //ub4                 rowoff,
-		nil,           //const OCISnapshot   *snap_in,
-		nil,           //OCISnapshot         *snap_out,
-		C.OCI_DEFAULT) //ub4                 mode );
-	ses.RUnlock()
 	hasPtrBind := stmt.hasPtrBind
 	stmt.RUnlock()
+
+	ses.RLock()
+	ses.SetNonblocking(true)
+	var r C.sword
+	d := 10 * time.Millisecond
+	for {
+		r = C.OCIStmtExecute(
+			//stmt.ses.ocisvcctx,      //OCISvcCtx           *svchp,
+			ses.ocisvcctx, //OCISvcCtx           *svchp,
+			ocistmt,       //OCIStmt             *stmtp,
+			env.ocierr,    //OCIError            *errhp,
+			C.ub4(0),      //ub4                 iters,
+			C.ub4(0),      //ub4                 rowoff,
+			nil,           //const OCISnapshot   *snap_in,
+			nil,           //OCISnapshot         *snap_out,
+			C.OCI_DEFAULT) //ub4                 mode );
+		if r != C.OCI_STILL_EXECUTING {
+			break
+		}
+		if err := ctx.Err(); err != nil {
+			ses.SetNonblocking(false)
+			ses.Break()
+			ses.RUnlock()
+			return nil, err
+		}
+		time.Sleep(d)
+		d += d >> 1 // *1.5
+	}
+	ses.SetNonblocking(false)
+	ses.RUnlock()
 	if r == C.OCI_ERROR {
 		return nil, errE(env.ociError())
 	}

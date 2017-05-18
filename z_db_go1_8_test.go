@@ -10,6 +10,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -48,7 +49,7 @@ func TestRapidCancelIssue192(t *testing.T) {
 		w = atomic.LoadUint64(&wait)
 		if err != nil {
 			fmt.Println(w, err)
-			if err == context.DeadlineExceeded {
+			if err == context.DeadlineExceeded && !strings.Contains(err.Error(), "ORA-01013") {
 				atomic.StoreUint64(&wait, w+1)
 			}
 			return err
@@ -58,7 +59,7 @@ func TestRapidCancelIssue192(t *testing.T) {
 
 	breakStuff := func(db *sql.DB) error {
 		for {
-			if err := dbQuery(db); err != nil && err != context.DeadlineExceeded {
+			if err := dbQuery(db); err != nil && err != context.DeadlineExceeded && !strings.Contains(err.Error(), "ORA-01013") {
 				return err
 			}
 			time.Sleep(100 * time.Millisecond)
@@ -66,7 +67,7 @@ func TestRapidCancelIssue192(t *testing.T) {
 		return nil
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	grp, ctx := errgroup.WithContext(ctx)
 	for i := 0; i < 1; i++ {

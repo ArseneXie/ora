@@ -795,14 +795,32 @@ func (ses *Ses) Break() (err error) {
 	if err != nil {
 		return errE(err)
 	}
-	ses.Lock()
-	defer ses.Unlock()
+	fmt.Printf("Break %p\n", ses)
+	//ses.Lock()
+	//defer ses.Unlock()
 	env := ses.Env()
 	if r := C.OCIBreak(unsafe.Pointer(ses.ocisvcctx), env.ocierr); r == C.OCI_ERROR {
 		return errE(env.ociError())
 	}
 	if r := C.OCIReset(unsafe.Pointer(ses.ocisvcctx), env.ocierr); r == C.OCI_ERROR {
 		return errE(env.ociError())
+	}
+	return nil
+}
+
+// SetNonblocking sets the nonblocking mode on the Ses.
+func (ses *Ses) SetNonblocking(set bool) error {
+	var state byte
+	r := C.OCIAttrGet(unsafe.Pointer(ses.ocisvcctx), C.OCI_HTYPE_SVCCTX, unsafe.Pointer(&state), nil, C.OCI_ATTR_NONBLOCKING_MODE, ses.srv.env.ocierr)
+	if r == C.OCI_ERROR {
+		return errE(ses.srv.env.ociError())
+	}
+	if set == (state == C.TRUE) {
+		return nil
+	}
+	r = C.OCIAttrSet(unsafe.Pointer(ses.ocisvcctx), C.OCI_HTYPE_SVCCTX, nil, 0, C.OCI_ATTR_NONBLOCKING_MODE, ses.srv.env.ocierr)
+	if r == C.OCI_ERROR {
+		return errE(ses.srv.env.ociError())
 	}
 	return nil
 }
